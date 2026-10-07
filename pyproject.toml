@@ -1,0 +1,37 @@
+[project]
+name = "rendvid"
+version = "0.1.0"
+description = "Local text-to-video on Apple Silicon"
+authors = [
+    { name = "Yogendra Singh", email = "yogendra.singh@fareye.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "accelerate>=1.15.0",
+    "diffusers>=0.40.0",
+    "fastapi>=0.142.2",
+    "faster-whisper>=1.2.1",
+    "httpx>=0.28.1",
+    "huggingface-hub[hf-xet]>=1.33.0",
+    "imageio>=2.38.0",
+    "imageio-ffmpeg>=0.6.0",
+    "kokoro>=0.9.4",
+    "numpy>=2.4.6",
+    "peft>=0.21.2",
+    "pillow>=12.3.0",
+    "protobuf>=7.36.2",
+    "python-multipart>=0.0.32",
+    "sentencepiece>=0.2.2",
+    "soundfile>=0.14.0",
+    "torch>=2.14.1",
+    "torchvision>=0.29.1",
+    "transformers>=5.18.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+rendvid = "rendvid:main"
+
+[build-system]
+requires = ["uv_build>=0.12.23,<0.13.0"]
+build-backend = "uv_build"

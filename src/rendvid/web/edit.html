@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RendVid Editor</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/edit.css">
+</head>
+<body>
+  <header>
+    <h1><a href="/" class="back">←</a> <span id="jobTitle">Editor</span></h1>
+    <div class="chips"><span id="jobState" class="chip">loading…</span><span id="dirty" class="chip no" hidden>unsaved</span></div>
+  </header>
+
+  <main class="editor">
+    <section class="panel previewPanel">
+      <div class="previewTabs seg" id="previewMode"></div>
+      <video id="preview" controls playsinline></video>
+      <div class="previewBar">
+        <span class="hint" id="previewInfo"></span>
+        <span class="spacer"></span>
+        <select id="versions" title="Earlier exports"></select>
+        <button id="restoreBtn">Restore</button>
+      </div>
+    </section>
+
+    <section class="panel inspector">
+      <div class="seg tabs" id="tabs"></div>
+
+      <!-- CLIP -->
+      <div class="tab" data-tab="Clip">
+        <p class="hint" id="noClip">Select a clip in the timeline below.</p>
+        <div id="clipPane" hidden>
+          <h2 id="clipTitle"></h2>
+          <div class="grid">
+            <label>Start at (s) <input type="number" id="trimIn" step="0.1" min="0"></label>
+            <label>End at (s) <input type="number" id="trimOut" step="0.1" min="0"></label>
+            <label>Speed
+              <select id="speed">
+                <option value="0.5">0.5× slow-mo</option><option value="0.75">0.75×</option>
+                <option value="1">1× normal</option><option value="1.25">1.25×</option>
+                <option value="1.5">1.5×</option><option value="2">2× fast</option>
+              </select>
+            </label>
+          </div>
+          <div class="grid">
+            <label>Transition to next clip <select id="transition"></select></label>
+            <label>Transition length (s) <input type="number" id="transDur" step="0.1" min="0.1" max="2"></label>
+          </div>
+          <div class="actions">
+            <button id="playClip">▶ Play clip</button>
+            <button id="moveLeft">← Move</button>
+            <button id="moveRight">Move →</button>
+            <button id="dupClip">Duplicate</button>
+            <button id="delClip">Delete</button>
+          </div>
+
+          <h2>Redo with AI</h2>
+          <textarea id="scenePrompt" rows="4"></textarea>
+          <div class="grid">
+            <label>Seed <input type="number" id="sceneSeed" placeholder="auto"></label>
+            <label class="check"><input type="checkbox" id="cascade"> Also redo the scenes that continue from it</label>
+          </div>
+          <div class="actions">
+            <button id="redoBtn" class="primary">Redo scene</button>
+            <button id="variationBtn">New variation</button>
+          </div>
+          <p class="hint">Re-renders only this scene (≈30–90 s each), keeps your edits, then re-exports. The old clip is kept in history/.</p>
+
+          <div class="story-only">
+            <h2>Voice-over line</h2>
+            <input type="text" id="narration" placeholder="Narration for this scene (empty = silent)">
+          </div>
+        </div>
+      </div>
+
+      <!-- TEXT -->
+      <div class="tab" data-tab="Text">
+        <h2>Titles & text</h2>
+        <div id="texts"></div>
+        <div class="actions"><button id="addText">+ Add text at playhead</button></div>
+        <h2><label class="check"><input type="checkbox" id="subsOn"> <span class="song-only">Show lyrics as subtitles</span><span class="story-only">Show voice-over subtitles</span></label></h2>
+        <div class="song-only">
+          <p class="hint">Fix lyric text or timing. Times are seconds into the song.</p>
+          <div id="lyrics"></div>
+          <div class="actions"><button id="addLyric">+ Add line at playhead</button></div>
+        </div>
+        <p class="hint story-only">Subtitles follow the voice-over lines (edit them in the Clip tab).</p>
+      </div>
+
+      <!-- AUDIO -->
+      <div class="tab" data-tab="Audio">
+        <h2><span class="song-only">Song</span><span class="story-only">Music</span></h2>
+        <div class="grid">
+          <label>Track <select id="musicFile"></select></label>
+          <label>Upload new <input type="file" id="musicUpload" accept=".mp3,.wav,.m4a,.ogg,.flac,.aac,audio/*"></label>
+        </div>
+        <label>Volume <input type="range" id="musicVol" min="0" max="2" step="0.05"></label>
+        <div class="story-only">
+          <h2>Voice-over</h2>
+          <div class="grid">
+            <label>Voice <select id="voice"></select></label>
+            <label>Voice volume <input type="range" id="voiceVol" min="0" max="2" step="0.05"></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- LOOK -->
+      <div class="tab" data-tab="Look">
+        <h2>Filter</h2>
+        <div class="filters" id="filters"></div>
+        <h2>Adjust</h2>
+        <label>Brightness <input type="range" id="bright" min="-0.3" max="0.3" step="0.01"></label>
+        <label>Contrast <input type="range" id="contrast" min="0.5" max="1.8" step="0.01"></label>
+        <label>Saturation <input type="range" id="sat" min="0" max="2" step="0.01"></label>
+        <p class="hint">The preview shows an approximation; the export applies the exact grade.</p>
+      </div>
+
+      <!-- EXPORT -->
+      <div class="tab" data-tab="Export">
+        <div class="grid">
+          <label>Aspect <div class="seg" id="aspect"></div></label>
+          <label>Reframe
+            <select id="fit">
+              <option value="crop">Crop to fill</option>
+              <option value="blur">Fit with blurred background</option>
+              <option value="pad">Fit with black bars</option>
+            </select>
+          </label>
+          <label>Resolution
+            <select id="resolution">
+              <option value="source">Source</option><option value="720">720p</option><option value="1080">1080p</option>
+            </select>
+          </label>
+        </div>
+        <label class="check"><input type="checkbox" id="smooth"> Smooth motion (48 fps, slower export)</label>
+        <label class="check song-only"><input type="checkbox" id="matchSong"> Match the song length (hold last frame / cut at song end)</label>
+      </div>
+
+      <div class="actions footer">
+        <button id="resetBtn">Reset to original</button>
+        <span class="spacer"></span>
+        <button id="saveBtn">Save</button>
+        <button id="exportBtn" class="primary">Export video</button>
+      </div>
+      <div class="bar" id="progress" hidden><i></i></div>
+      <p class="hint" id="taskMsg"></p>
+    </section>
+
+    <section class="panel timelinePanel">
+      <div class="timelineHead">
+        <h2>Timeline</h2>
+        <span class="hint" id="timelineInfo"></span>
+      </div>
+      <div id="timeline"></div>
+      <p class="hint">Drag clips to reorder. Click a clip to edit it.</p>
+    </section>
+  </main>
+
+  <script src="/static/edit.js"></script>
+</body>
+</html>

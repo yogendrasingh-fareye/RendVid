@@ -1,0 +1,121 @@
+:root {
+  --bg: #f6f6f4;
+  --panel: #ffffff;
+  --text: #1c1c1a;
+  --muted: #6b6b66;
+  --line: #e2e2dd;
+  --accent: #4b5bdc;
+  --accent-text: #ffffff;
+  --ok: #2f8a4f;
+  --warn: #b7791f;
+  --bad: #c0392b;
+  --field: #fbfbf9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413;
+    --panel: #1d1d1b;
+    --text: #ecece7;
+    --muted: #9a9a93;
+    --line: #2f2f2c;
+    --accent: #8090ff;
+    --accent-text: #0f0f1a;
+    --ok: #5cc184;
+    --warn: #e0a84a;
+    --bad: #ef6f5f;
+    --field: #232321;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+header {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  padding: 14px 20px; border-bottom: 1px solid var(--line);
+}
+h1 { margin: 0; font-size: 20px; }
+h1 span { font-weight: 400; color: var(--muted); font-size: 14px; margin-left: 6px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 22px 0 8px; }
+h2:first-child { margin-top: 0; }
+main {
+  display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 20px;
+  padding: 20px; max-width: 1500px; margin: 0 auto;
+}
+@media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 16px; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 0; }
+#gallery { align-self: start; position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow: auto; }
+@media (max-width: 900px) { #gallery { position: static; max-height: none; } }
+
+textarea, input[type=text], input[type=number], select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--field); color: var(--text); font: inherit;
+}
+textarea { resize: vertical; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 10px 0; align-items: end; }
+.hint { color: var(--muted); font-size: 12px; margin: 4px 0; }
+details { margin-top: 10px; }
+summary { cursor: pointer; color: var(--muted); }
+
+.seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { flex: 1; border: 0; border-radius: 0; padding: 8px 4px; background: var(--field); }
+.seg button.on { background: var(--accent); color: var(--accent-text); }
+
+button {
+  font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--field); color: var(--text); cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+button:disabled { opacity: .5; cursor: progress; }
+.actions { display: flex; gap: 10px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+
+#imagePreview { max-height: 90px; border-radius: 8px; justify-self: start; }
+#musicUploadRow, #musicGenRow { margin: 6px 0; }
+
+#scenes { list-style: none; padding: 0; margin: 10px 0; display: flex; flex-direction: column; gap: 10px; }
+.scene { border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.sceneHead { display: flex; align-items: center; gap: 8px; }
+.sceneHead button { padding: 2px 8px; }
+.spacer { flex: 1; }
+
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.chip.ok::before { content: "● "; color: var(--ok); }
+.chip.no::before { content: "● "; color: var(--warn); }
+
+#viewer video { width: 100%; border-radius: 10px; background: #000; max-height: 60vh; }
+#viewerInfo { margin: 6px 0 14px; font-size: 12px; color: var(--muted); }
+.job { display: grid; grid-template-columns: 96px 1fr; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.job:first-child { border-top: 0; }
+.job img, .job .ph { width: 96px; height: 54px; object-fit: cover; border-radius: 6px; background: var(--line); }
+.job h3 { margin: 0 0 2px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job .meta { font-size: 12px; color: var(--muted); }
+.job .btns { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.job .btns button, .job .btns a { padding: 3px 10px; font-size: 12px; }
+.job .btns a { color: var(--accent); text-decoration: none; border: 1px solid var(--line); border-radius: 8px; }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+.bar i { display: block; height: 100%; background: var(--accent); transition: width .5s; }
+.st-done { color: var(--ok); } .st-failed { color: var(--bad); } .st-running { color: var(--accent); }
+.st-cancelled, .st-interrupted { color: var(--warn); }
+.clips { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; margin-top: 8px; }
+.clips video { width: 100%; border-radius: 6px; }
+.empty { color: var(--muted); padding: 20px 0; text-align: center; }
+
+.modeSeg { margin-bottom: 18px; }
+.modeSeg button { padding: 10px; font-weight: 600; }
+body[data-mode="story"] .song-only, body[data-mode="song"] .story-only,
+body:not([data-mode="studio"]) .studio-only,
+body[data-mode="studio"] .nostudio, body[data-mode="studio"] .story-only, body[data-mode="studio"] .song-only { display: none !important; }
+.narr { font-size: 15px; }
+.visual { font-size: 12px; color: var(--muted); }
+.chapterTag { margin-left: 4px; }
+.charRow { display: grid; grid-template-columns: 140px 1fr 28px; gap: 6px; margin-bottom: 6px; }
+.charRow button { padding: 3px 0; }
+#studioSource { margin-bottom: 8px; }
+
+.crewLink { font-size: 13px; font-weight: 600; margin-left: 10px; padding: 4px 10px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-text); text-decoration: none; vertical-align: middle; }

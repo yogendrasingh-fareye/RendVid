@@ -1,0 +1,56 @@
+.back { color: var(--muted); text-decoration: none; margin-right: 4px; }
+main.crew {
+  grid-template-columns: 220px minmax(0, 1fr) 220px;
+  max-width: 1600px; height: calc(100vh - 62px); align-items: stretch;
+}
+@media (max-width: 1100px) { main.crew { grid-template-columns: 200px minmax(0, 1fr); } .roster { display: none; } }
+@media (max-width: 700px) { main.crew { grid-template-columns: 1fr; height: auto; } .side { max-height: 180px; } }
+.side, .roster { overflow: auto; }
+.side #newBtn { width: 100%; margin-bottom: 12px; }
+.prod { padding: 8px 10px; border-radius: 8px; cursor: pointer; margin-bottom: 4px; }
+.prod:hover { background: var(--field); }
+.prod.sel { background: var(--field); outline: 1px solid var(--accent); }
+.prod b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prod span { font-size: 11px; color: var(--muted); }
+
+.chat { display: flex; flex-direction: column; min-height: 0; padding: 0; }
+#thread { flex: 1; overflow: auto; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.welcome { margin: auto; max-width: 560px; text-align: center; }
+.welcome p { color: var(--muted); }
+.examples { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.examples button { text-align: left; }
+
+.msg { display: grid; grid-template-columns: 34px 1fr; gap: 10px; max-width: 900px; }
+.msg.user { align-self: flex-end; grid-template-columns: 1fr; }
+.msg.user .body { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+.avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: #fff; }
+.who { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+.body { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--field); white-space: pre-wrap; word-wrap: break-word; }
+.msg.error .body { border-color: var(--bad); color: var(--bad); }
+.card { margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--panel); white-space: normal; }
+.card table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.card td, .card th { border-top: 1px solid var(--line); padding: 5px 6px; vertical-align: top; text-align: left; }
+.card th { color: var(--muted); font-weight: 600; width: 110px; }
+.card .actions { margin-top: 10px; }
+.sb { max-height: 420px; overflow: auto; }
+.sb td.n { width: 28px; color: var(--muted); }
+.sb .narr { font-size: 13px; }
+.sb .vis { color: var(--muted); font-size: 11px; margin-top: 3px; }
+.card video { width: 100%; border-radius: 8px; background: #000; max-height: 60vh; }
+.card .bar { margin-top: 6px; }
+
+.activity { display: flex; align-items: center; gap: 8px; padding: 6px 18px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); }
+.dots { display: inline-flex; gap: 3px; }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.2s infinite; }
+.dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
+
+#composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
+#composer textarea { flex: 1; resize: none; }
+
+.member { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 8px; }
+.member .avatar { width: 28px; height: 28px; font-size: 11px; }
+.member div { font-size: 13px; }
+.member small { display: block; color: var(--muted); font-size: 11px; }
+.member.active { background: var(--field); outline: 1px solid var(--accent); }
+.member.active small { color: var(--accent); }
