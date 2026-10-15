@@ -17,6 +17,12 @@ from .jobs import ACTIVE, JobManager
 app = FastAPI(title="RendVid")
 jobs = JobManager()
 
+from .library_api import router as library_router  # noqa: E402
+from .library_api import setup as library_setup  # noqa: E402
+
+library_setup(jobs)
+app.include_router(library_router)
+
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
 
@@ -149,7 +155,8 @@ def _validate_studio(spec: dict) -> dict:
     lines[0]["new_shot"] = True
     spec["lines"] = lines
     spec["characters"] = [
-        {"name": str(c.get("name", "")).strip()[:30], "look": str(c.get("look", "")).strip()[:300]}
+        {"name": str(c.get("name", "")).strip()[:30], "look": str(c.get("look", "")).strip()[:1200],
+         "library_id": str(c.get("library_id") or "")[:60]}
         for c in spec.get("characters", []) if str(c.get("name", "")).strip() and str(c.get("look", "")).strip()
     ][:6]
     spec["scenes"] = []  # built from narration timing when the job starts
@@ -431,11 +438,20 @@ app.mount("/static", StaticFiles(directory=config.WEB), name="static")
 
 from .crew import members as crew_members  # noqa: E402
 from .crew import production as crew  # noqa: E402
+from .crew import runner as crew_runner  # noqa: E402
 
 
 def _submit_spec(spec: dict) -> dict:
+    import shutil
+
+    song = spec.pop("song_path", None)
     data = _validate(spec)
     job = jobs.create(data)
+    if song:  # music video: the song becomes the job's soundtrack before it starts
+        name = "music_upload" + Path(song).suffix.lower()
+        shutil.copy2(song, jobs.dir(job["id"]) / name)
+        data["music_file"] = name
+        jobs.update(job["id"], spec=data)
     return jobs.enqueue(job["id"])
 
 
@@ -443,7 +459,19 @@ crew.setup(jobs, _submit_spec)
 
 
 class CrewMessage(BaseModel):
-    text: str
+    text: str = ""
+    attachments: list[str] = []
+
+
+@app.post("/api/crew/attachments")
+async def crew_attach(files: list[UploadFile] = File(...)):
+    out = []
+    for f in files:
+        try:
+            out.append(crew.save_attachment(f.filename or "file", await f.read()))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    return out
 
 
 @app.get("/api/crew/roster")
@@ -458,11 +486,11 @@ def crew_list():
 
 @app.post("/api/crew/productions")
 def crew_create(msg: CrewMessage):
-    if not msg.text.strip():
+    if not msg.text.strip() and not msg.attachments:
         raise HTTPException(400, "Say what film you want")
     if not planner.llm_available():
         raise HTTPException(400, "The crew needs the Claude CLI (claude) installed and logged in")
-    return crew.create(msg.text)
+    return crew.create(msg.text, msg.attachments)
 
 
 @app.get("/api/crew/productions/{pid}")
@@ -481,7 +509,7 @@ def crew_message(pid: str, msg: CrewMessage):
     if not crew.load(pid):
         raise HTTPException(404, "No such production")
     try:
-        crew.user_message(pid, msg.text)
+        crew.user_message(pid, msg.text, msg.attachments)
     except ValueError as e:
         raise HTTPException(409, str(e))
     return {"ok": True}
@@ -500,15 +528,54 @@ def crew_approve(pid: str, req: CrewApprove):
     return {"ok": True}
 
 
+@app.post("/api/crew/productions/{pid}/stop")
+def crew_stop(pid: str):
+    if not crew.load(pid):
+        raise HTTPException(404, "No such production")
+    try:
+        return {"stopped": crew.stop(pid)}
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/crew/productions/{pid}/resume")
+def crew_resume(pid: str):
+    if not crew.load(pid):
+        raise HTTPException(404, "No such production")
+    try:
+        crew.resume(pid)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    return {"ok": True}
+
+
 @app.delete("/api/crew/productions/{pid}")
 def crew_delete(pid: str):
     crew._path(pid).unlink(missing_ok=True)
     return {"ok": True}
 
 
-@app.get("/crew")
-def crew_page():
-    return FileResponse(config.WEB / "crew.html")
+@app.get("/api/crew/skills")
+def crew_skills():
+    """How each role works: outputs/.crew/skills/<role>.md (read-only view for the UI)."""
+    out = []
+    for k, m in crew_members.CREW.items():
+        f = crew_runner.CREW_DIR / "skills" / f"{m['skill']}.md"
+        out.append({"key": k, "role": m["role"], "name": m["skill"], "path": str(f),
+                    "content": f.read_text() if f.exists() else ""})
+    return out
+
+
+@app.get("/api/crew/memory")
+def crew_memory():
+    """What the crew has learned: team.md, members/<key>.md and history.md (read-only view for the UI)."""
+    d = crew_runner.CREW_DIR
+
+    def read(p: Path) -> str:
+        return p.read_text() if p.exists() else ""
+
+    return {"dir": str(d), "team": read(d / "team.md"), "history": read(d / "history.md"),
+            "members": {k: read(d / "members" / f"{k}.md") for k in crew_members.CREW}}
 
 
 @app.get("/edit/{job_id}")
@@ -516,6 +583,15 @@ def edit_page(job_id: str):
     return FileResponse(config.WEB / "edit.html")
 
 
+# --- web app (web-app/, built into web/app by `pnpm build`) ----------------------------
+
+APP_DIR = config.WEB / "app"
+app.mount("/assets", StaticFiles(directory=APP_DIR / "assets", check_dir=False), name="assets")
+
+
 @app.get("/")
 def index():
-    return FileResponse(config.WEB / "index.html")
+    page = APP_DIR / "index.html"
+    if not page.exists():
+        raise HTTPException(503, "Web app not built: run `pnpm install && pnpm build` in web-app/")
+    return FileResponse(page, headers={"Cache-Control": "no-cache"})

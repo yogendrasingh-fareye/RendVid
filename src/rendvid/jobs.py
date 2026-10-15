@@ -6,6 +6,8 @@ stopped come back as "interrupted" and can be resumed; queued ones re-queue.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import queue
 import threading
@@ -13,6 +15,7 @@ import time
 import traceback
 import uuid
 from pathlib import Path
+from typing import Callable
 
 from . import config
 from .model import Cancelled
@@ -20,6 +23,22 @@ from . import editor
 from .render import run_job
 
 ACTIVE = {"queued", "running"}
+GPU_LOCK = "/tmp/rendvid-gpu.lock"  # shared with `rendvid train` and benchmark scripts
+
+
+@contextlib.contextmanager
+def gpu_lock(waiting: Callable[[], None]):
+    """Exclusive use of the GPU across processes (16 GB can't hold two models)."""
+    with open(GPU_LOCK, "w") as fh:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            waiting()
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 class JobManager:
@@ -115,8 +134,15 @@ class JobManager:
             cancel = lambda job_id=job_id: job_id in self.cancel_flags  # noqa: E731
             task = job.get("task", "render")
             d = self.dir(job_id)
+            gpu = contextlib.nullcontext()
             try:
-                if job["spec"].get("mode") == "studio" and task in ("render", "redo"):
+                gpu = gpu_lock(lambda job_id=job_id: self.update(job_id, message="Waiting for the GPU (another model run is using it)…"))
+                gpu.__enter__()
+                if job["spec"].get("mode") == "asset":  # Library: reference images / LoRA training
+                    from .library import run_asset_job
+
+                    timings = run_asset_job(job["spec"], lambda stage, p, msg, job_id=job_id: report(stage, p, msg), cancel)
+                elif job["spec"].get("mode") == "studio" and task in ("render", "redo"):
                     from .studio_render import run_studio
 
                     timings = run_studio(job, d, report, cancel, lambda spec, job_id=job_id: self.update(job_id, spec=spec))
@@ -130,11 +156,15 @@ class JobManager:
                 if task != "render":
                     timings = {**(job.get("timings") or {}), "last_edit": timings}
                 self.update(job_id, status="done", progress=1.0, message="Done", timings=timings,
-                            final=f"/outputs/{job_id}/final.mp4")
+                            final=None if job["spec"].get("mode") == "asset" else f"/outputs/{job_id}/final.mp4")
             except Cancelled:
                 self.update(job_id, status="cancelled", message="Cancelled. Resume keeps finished scenes.")
             except Exception as e:
                 traceback.print_exc()
                 self.update(job_id, status="failed", message=str(e)[:500], error=traceback.format_exc()[-4000:])
             finally:
+                try:
+                    gpu.__exit__(None, None, None)
+                except Exception:
+                    pass
                 self.cancel_flags.discard(job_id)

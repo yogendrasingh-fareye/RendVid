@@ -1,6 +1,7 @@
 """RendVid: local text-to-video on Apple Silicon."""
 
 import argparse
+import json
 import os
 
 # Let PyTorch fall back to CPU for the few ops MPS lacks, and don't cap MPS
@@ -52,10 +53,27 @@ def main() -> None:
     b.add_argument("--aspect", default="16:9")
     b.add_argument("--prompt", default="A golden retriever runs along a sunny beach, waves crashing behind it, "
                    "its ears flapping in the wind. The camera tracks alongside at dog height. Warm afternoon light.")
+    t = sub.add_parser("train", help="train a character or style LoRA locally")
+    t.add_argument("--kind", required=True, choices=["character", "style"])
+    t.add_argument("--name", required=True)
+    t.add_argument("--images", help="folder of training images (optional <image>.txt captions); "
+                   "omit to generate a set from --describe")
+    t.add_argument("--describe", default="", help="description to generate a training set from")
+    t.add_argument("--style", default="", help="style words for generated training images")
+    t.add_argument("--class-word", default="", help="class word for character captions, e.g. crow")
+    t.add_argument("--count", type=int, default=16, help="images to generate when --images is omitted")
+    t.add_argument("--steps", type=int)
+    t.add_argument("--rank", type=int)
+    t.add_argument("--lr", type=float)
+    t.add_argument("--resolution", type=int)
+    t.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
     if args.cmd == "bench":
         _bench(args)
+        return
+    if args.cmd == "train":
+        _train(args)
         return
     import uvicorn
 
@@ -85,3 +103,32 @@ def _bench(args) -> None:
     out = config.OUTPUTS / f"bench_{args.preset}.mp4"
     stitch.write_clip(frames, out)
     print(f"wrote {out}")
+
+
+def _train(args) -> None:
+    from pathlib import Path
+
+    from . import config, keyframes, training
+
+    trigger = training.default_trigger(args.kind, args.name)
+    slug = trigger.removeprefix("rvd_style_").removeprefix("rvd_")
+    if args.images:
+        images = sorted(p for p in Path(args.images).iterdir()
+                        if p.suffix.lower() in training.IMAGE_EXTS and not p.name.startswith("_"))
+    else:
+        if not args.describe:
+            raise SystemExit("give --images <dir> or --describe \"<what it looks like>\"")
+        data = config.OUTPUTS / ".loras" / "datasets" / args.kind / slug
+        images = sorted(p for p in data.glob("[0-9]*.png")) if data.exists() else []
+        if len(images) < args.count:
+            print(f"generating {args.count} training images in {data} ...", flush=True)
+            images = training.make_training_set(args.describe, args.style, data, count=args.count, seed=args.seed,
+                                                kind=args.kind,
+                                                on_progress=lambda d, n: print(f"  image {d}/{n}", flush=True))
+    out = keyframes.LORA_DIR / args.kind / f"{slug}.safetensors"
+    print(f"training {args.kind} LoRA {trigger!r} on {len(images)} images -> {out}", flush=True)
+    info = training.train_lora(args.kind, args.name, images, out, trigger=trigger,
+                               class_word=args.class_word if args.kind != "style" else "",
+                               steps=args.steps, rank=args.rank, lr=args.lr, resolution=args.resolution,
+                               seed=args.seed, log=lambda m: print(m, flush=True))
+    print(json.dumps(info, indent=2))

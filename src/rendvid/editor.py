@@ -48,7 +48,7 @@ def clip_path(job_dir: Path, scene: int) -> Path:
 
 
 def default_edit(spec: dict, job_dir: Path) -> dict:
-    song = spec.get("mode") == "song"
+    song = spec.get("mode") == "song" or bool(spec.get("song"))
     music = spec.get("music") or {}
     music_file = spec.get("music_file") if (song or music.get("mode") == "upload") else None
     if not song and music.get("mode") == "generate" and (job_dir / "music.wav").exists():
@@ -256,7 +256,7 @@ def export(
     """Render edit.json to final.mp4. Progress is mapped onto [base, 1]."""
     t0 = time.time()
     edit = load_edit(spec, job_dir)
-    song = spec.get("mode") == "song"
+    song = spec.get("mode") == "song" or bool(spec.get("song"))
 
     def rep(frac: float, msg: str) -> None:
         report("assemble", base + (1 - base) * frac, msg)

@@ -14,6 +14,15 @@ CKPT_REPO = "Lightricks/LTX-Video"
 CKPT_FILE = "ltxv-2b-0.9.8-distilled.safetensors"
 UPSCALER_REPO = "Lightricks/ltxv-spatial-upscaler-0.9.7"
 
+# Video engine: "ltx" (LTX-Video 2B distilled) or "wan" (Wan 2.2 TI2V-5B,
+# few-step distill, see wan.py). A preset can override it with "engine".
+VIDEO_ENGINE = "ltx"
+WAN_REPO = "yetter-ai/Wan2.2-TI2V-5B-Turbo-Diffusers"
+WAN_SAMPLER = "unipc"  # "unipc" (Turbo, 4 steps) or "dmd" (FastWan, fixed sigmas)
+WAN_STEPS = 4
+WAN_SHIFT = 5.0
+WAN_DMD_SIGMAS = [1.0, 0.757, 0.522]
+
 MUSICGEN_REPO = "facebook/musicgen-small"
 WHISPER_MODEL = "small"
 

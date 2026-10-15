@@ -1,0 +1,86 @@
+/* ---- theme: one primary colour drives every token (set live from the Theme dialog) ----
+   Each step keeps a fixed lightness, so contrast holds for any primary; hue and chroma come from --primary.
+   Neutrals carry a faint tint of the primary hue. Status colours (success, warning, danger) stay fixed.
+   --brightness (0.7-1, the Theme dialog slider) scales every derived lightness, dimming the palette without touching the display. */
+:root {
+  --primary: #ec6b45;
+  --brightness: 1;
+  --primary-50: oklch(from var(--primary) calc(0.95 * var(--brightness)) calc(c * 0.2) h);
+  --primary-100: oklch(from var(--primary) calc(0.925 * var(--brightness)) calc(c * 0.24) h);
+  --primary-200: oklch(from var(--primary) calc(0.87 * var(--brightness)) calc(c * 0.28) h);
+  --primary-300: oklch(from var(--primary) calc(0.82 * var(--brightness)) calc(c * 0.36) h);
+  --primary-400: oklch(from var(--primary) calc(0.74 * var(--brightness)) calc(c * 0.6) h);
+  --primary-600: oklch(from var(--primary) calc(0.61 * var(--brightness)) calc(c * 1.0) h);
+  --primary-700: oklch(from var(--primary) calc(0.55 * var(--brightness)) calc(c * 0.8) h);
+  --primary-800: oklch(from var(--primary) calc(0.5 * var(--brightness)) calc(c * 0.68) h);
+  /* Text on a solid --primary: oklch(calc(1 * var(--brightness)) 0 0) on mid/dark primaries, near-black on light ones. */
+  --on-primary: oklch(from var(--primary) clamp(0.2, (0.72 - l) * 1000, 1) calc(c * 0.15) h);
+  --n-0: oklch(from var(--primary) calc(0.985 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-25: oklch(from var(--primary) calc(0.975 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-50: oklch(from var(--primary) calc(0.965 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-100: oklch(from var(--primary) calc(0.945 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-150: oklch(from var(--primary) calc(0.92 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-200: oklch(from var(--primary) calc(0.9 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-300: oklch(from var(--primary) calc(0.85 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-400: oklch(from var(--primary) calc(0.78 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-500: oklch(from var(--primary) calc(0.71 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-600: oklch(from var(--primary) calc(0.64 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-700: oklch(from var(--primary) calc(0.56 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-800: oklch(from var(--primary) calc(0.46 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-900: oklch(from var(--primary) calc(0.36 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --n-950: oklch(from var(--primary) calc(0.27 * var(--brightness)) min(calc(c * 0.06), 0.012) h);
+  --surface: oklch(calc(1 * var(--brightness)) 0 0);
+  --success-fg: oklch(from #3f7a5e calc(l * var(--brightness)) c h); --success-line: oklch(from #c4ddd0 calc(l * var(--brightness)) c h);
+  --warn-fg: oklch(from #9a6a2a calc(l * var(--brightness)) c h); --warn-bg: oklch(from #f5ead1 calc(l * var(--brightness)) c h); --warn-line: oklch(from #e2c98e calc(l * var(--brightness)) c h);
+  --danger-fg: oklch(from #b24f35 calc(l * var(--brightness)) c h); --danger-bg: oklch(from #f7e0d8 calc(l * var(--brightness)) c h); --danger-line: oklch(from #e8b3a4 calc(l * var(--brightness)) c h);
+  color-scheme: light;
+  --line: var(--n-150);
+  --paper: var(--n-0);
+}
+:root { font-family: 'DM Sans', 'Avenir Next', sans-serif; color: var(--n-950); background: var(--n-50); font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+
+/* Thin 4px scrollbars everywhere. Chrome ignores ::-webkit-scrollbar once scrollbar-width is set, so the standard
+   property is applied to Firefox only (it cannot set an exact width; "thin" is its closest). */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--n-300); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--n-400); }
+::-webkit-scrollbar-corner { background: transparent; }
+@supports (-moz-appearance: none) { * { scrollbar-width: thin; scrollbar-color: var(--n-300) transparent; } }
+
+/* Dark theme: the same token names (elevation kept: cards lightest, sidebar and selected rows recessed) with the lightness ladders flipped, so every rule works unchanged.
+   Chosen in the Theme dialog, or automatically when the primary is too light to read on a light page. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --primary-50: oklch(from var(--primary) calc(.24 * var(--brightness)) calc(c * .3) h);
+  --primary-100: oklch(from var(--primary) calc(.27 * var(--brightness)) calc(c * .34) h);
+  --primary-200: oklch(from var(--primary) calc(.34 * var(--brightness)) calc(c * .4) h);
+  --primary-300: oklch(from var(--primary) calc(.42 * var(--brightness)) calc(c * .5) h);
+  --primary-400: oklch(from var(--primary) calc(.56 * var(--brightness)) calc(c * .7) h);
+  --primary-600: oklch(from var(--primary) calc(.76 * var(--brightness)) calc(c * .9) h);
+  --primary-700: oklch(from var(--primary) calc(.82 * var(--brightness)) calc(c * .75) h);
+  --primary-800: oklch(from var(--primary) calc(.88 * var(--brightness)) calc(c * .6) h);
+  --n-0: oklch(from var(--primary) calc(.235 * var(--brightness)) min(calc(c * .06), .01) h);
+  --n-25: oklch(from var(--primary) calc(.205 * var(--brightness)) min(calc(c * .06), .01) h);
+  --n-50: oklch(from var(--primary) calc(.2 * var(--brightness)) min(calc(c * .06), .01) h);
+  --n-100: oklch(from var(--primary) calc(.175 * var(--brightness)) min(calc(c * .06), .012) h);
+  --n-150: oklch(from var(--primary) calc(.3 * var(--brightness)) min(calc(c * .06), .012) h);
+  --n-200: oklch(from var(--primary) calc(.33 * var(--brightness)) min(calc(c * .06), .012) h);
+  --n-300: oklch(from var(--primary) calc(.4 * var(--brightness)) min(calc(c * .06), .012) h);
+  --n-400: oklch(from var(--primary) calc(.5 * var(--brightness)) min(calc(c * .06), .012) h);
+  --n-500: oklch(from var(--primary) calc(.6 * var(--brightness)) min(calc(c * .06), .012) h);
+  --n-600: oklch(from var(--primary) calc(.68 * var(--brightness)) min(calc(c * .06), .012) h);
+  --n-700: oklch(from var(--primary) calc(.76 * var(--brightness)) min(calc(c * .06), .012) h);
+  --n-800: oklch(from var(--primary) calc(.84 * var(--brightness)) min(calc(c * .06), .012) h);
+  --n-900: oklch(from var(--primary) calc(.9 * var(--brightness)) min(calc(c * .06), .012) h);
+  --n-950: oklch(from var(--primary) calc(.95 * var(--brightness)) min(calc(c * .06), .01) h);
+  --surface: oklch(from var(--primary) calc(.255 * var(--brightness)) min(calc(c * .06), .012) h);
+  --success-fg: oklch(from #8fd0aa calc(l * var(--brightness)) c h); --success-line: oklch(from #2f5040 calc(l * var(--brightness)) c h);
+  --warn-fg: oklch(from #e3b86a calc(l * var(--brightness)) c h); --warn-bg: oklch(from #3a3020 calc(l * var(--brightness)) c h); --warn-line: oklch(from #5e4b29 calc(l * var(--brightness)) c h);
+  --danger-fg: oklch(from #f2937a calc(l * var(--brightness)) c h); --danger-bg: oklch(from #432822 calc(l * var(--brightness)) c h); --danger-line: oklch(from #6e3b2f calc(l * var(--brightness)) c h);
+}
+body { background: var(--n-50); }

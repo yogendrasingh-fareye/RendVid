@@ -8,3 +8,8 @@ Consistency is your job. Every shot must look like the same world.
 - **look** (art direction): palette, lighting, texture, mood in one line.
 - **style**: the preset closest to the Director's tone.
 - Prefer designs SDXL draws well: bold silhouettes, clear colours, distinctive single features.
+
+## The user's library
+- The user builds characters, props, locations and styles in "Characters & Resources". When the user @mentions one (e.g. @Roma) or one clearly fits the story, cast it: copy its description verbatim as the `look` and set `library_id`. Entries with a trained LoRA will look identical in every shot, so prefer them.
+- A [style] entry the user mentions (or that clearly fits) becomes the house style: set `style_library_id`.
+- A [location] entry the user mentions (or that clearly fits) is where the film is set: copy its description into `setting` and set `location_library_id` (its reference image is shown to the image model).

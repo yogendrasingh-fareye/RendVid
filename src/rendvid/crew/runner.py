@@ -100,9 +100,24 @@ class MemberError(RuntimeError):
     pass
 
 
+class Stopped(RuntimeError):
+    """The user pressed Stop while this member was working."""
+
+
+_procs: dict[str, set[subprocess.Popen]] = {}  # owner (production id) -> running claude processes
+
+
+def stop(owner: str) -> int:
+    """Kill every running member call of ``owner``; returns how many."""
+    procs = list(_procs.get(owner, ()))
+    for p in procs:
+        p.kill()
+    return len(procs)
+
+
 def run(
     key: str, member: dict, prompt: str, schema: dict, *,
-    read_dir: Path | None = None, timeout: int = 900,
+    read_dir: Path | None = None, timeout: int = 900, owner: str | None = None,
 ) -> dict:
     """One member turn. Returns the structured output (memories saved separately).
 
@@ -122,11 +137,24 @@ def run(
         args += ["--tools", "Read", "--allowedTools", "Read", "--add-dir", str(read_dir)]
     else:
         args += ["--tools", ""]
-    p = subprocess.run(args, cwd=str(read_dir or tempfile.gettempdir()), capture_output=True, text=True, timeout=timeout)
+    p = subprocess.Popen(args, cwd=str(read_dir or tempfile.gettempdir()), stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True)
+    if owner:
+        _procs.setdefault(owner, set()).add(p)
     try:
-        out = json.loads(p.stdout)
+        stdout, stderr = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        stdout, stderr = p.communicate()
+    finally:
+        if owner:
+            _procs.get(owner, set()).discard(p)
+    if p.returncode is not None and p.returncode < 0:  # killed by stop()
+        raise Stopped(f"{member['role']} was stopped")
+    try:
+        out = json.loads(stdout)
     except json.JSONDecodeError:
-        raise MemberError(f"{member['role']}: Claude CLI failed: {(p.stderr or p.stdout)[-400:]}")
+        raise MemberError(f"{member['role']}: Claude CLI failed: {(stderr or stdout)[-400:]}")
     if out.get("is_error") or not out.get("structured_output"):
         raise MemberError(f"{member['role']}: {str(out.get('result') or 'no structured answer')[:400]}")
     data = out["structured_output"]

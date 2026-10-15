@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23ec6b45'/%3E%3Ctext x='16' y='23' font-family='Georgia,serif' font-size='20' fill='white' text-anchor='middle'%3ER%3C/text%3E%3C/svg%3E" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RendVid</title>
+    <script>
+      // Pick the theme before first paint so dark mode never flashes light.
+      try { var a = localStorage.getItem('rendvid.appearance') || 'auto'; document.documentElement.dataset.theme = a === 'auto' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : a } catch (e) {}
+    </script>
+    <script type="module" crossorigin src="/assets/index-DYG8pk3q.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-B5zRgEdc.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

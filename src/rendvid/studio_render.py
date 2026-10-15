@@ -36,16 +36,19 @@ def _frames_for(seconds: float, overlap: bool) -> int:
     return min(config.CLIP_FRAMES, max(33, 8 * math.ceil((need - 1) / 8) + 1))
 
 
-def shot_list(lines: list[dict], durations: list[float]) -> list[dict]:
-    """One or more clips per narration line, sized to the spoken audio."""
+def shot_list(lines: list[dict], durations: list[float], exact: bool = False) -> list[dict]:
+    """One or more clips per line, sized to the spoken audio (narration gets
+    breathing room). ``exact``: music videos, where beats must add up to the song."""
     scenes = []
     for i, (ln, dur) in enumerate(zip(lines, durations)):
-        target = dur + (0.5 if i == 0 else 0.0) + (1.6 if i == len(lines) - 1 else 0.45)
+        # Only spoken lines get breathing room; silent beats and song beats are exact.
+        spoken = bool(ln.get("narration", "").strip())
+        target = dur if exact or not spoken else dur + (0.5 if i == 0 else 0.0) + (1.6 if i == len(lines) - 1 else 0.45)
         n = 1 if target <= FIRST_MAX else 1 + math.ceil((target - FIRST_MAX) / CONT_MAX)
         lens = [target / n] * n
         for k, length in enumerate(lens):
             first = k == 0
-            keyframe = first and (i == 0 or ln.get("new_shot", True))
+            keyframe = first and (i == 0 or ln.get("new_shot", True) or bool(ln.get("from_image")))
             scenes.append({
                 "prompt": ln["visual"] if first else f"{ln['visual']} The motion continues smoothly.",
                 "narration": ln["narration"] if first else "",
@@ -104,7 +107,7 @@ def run_studio(
     check()
 
     if not spec.get("scenes"):
-        spec["scenes"] = shot_list(lines, durations)
+        spec["scenes"] = shot_list(lines, durations, exact=bool(spec.get("song")))
         save_spec(spec)
 
     # 2. Portraits + keyframes (SDXL), skipped when all exist. A crew film has
@@ -117,22 +120,54 @@ def run_studio(
         engine = keyframes.KeyframeEngine()
         try:
             rep("keyframes", 0.05, "Drawing character references…")
+            # Characters cast from the user's Library bring their own reference image.
+            from . import library
+
+            (job_dir / "characters").mkdir(exist_ok=True)
+            for ch in spec.get("characters", []):
+                cover = library.cover_path(ch["library_id"]) if ch.get("library_id") else None
+                target = job_dir / "characters" / f"{keyframes._slug(ch['name'])}.png"
+                if cover and cover.exists() and not target.exists():
+                    Image.open(cover).convert("RGB").save(target)
             refs = keyframes.make_portraits(spec.get("characters", []), config.STYLES.get(spec.get("style", "none"), ""),
                                             job_dir / "characters", int(spec.get("seed", 42)), engine, should_cancel,
                                             setting=spec.get("setting", ""))
             vw, vh = config.ASPECTS[spec["aspect"]][spec["preset"]]
             kf_dir.mkdir(exist_ok=True)
+            char_loras = {ch["name"]: lo for ch in spec.get("characters", [])
+                          if ch.get("library_id") and (lo := library.lora_for(ch["library_id"]))}
+            style_loras = [lo] if spec.get("style_asset") and (lo := library.lora_for(spec["style_asset"])) else []
+            loc_cover = library.cover_path(spec["location_asset"]) if spec.get("location_asset") else None
+            location_ref = Image.open(loc_cover).convert("RGB") if loc_cover and loc_cover.exists() else None
+            if char_loras or style_loras:
+                rep("keyframes", 0.08, f"Using trained LoRAs: {', '.join(list(char_loras) + ['house style'] * len(style_loras))}")
 
             def draw(items, label="Keyframe"):
                 for k, (i, sc) in enumerate(items):
                     check()
                     ln = lines[sc["line"]]
-                    # Reference image only for single-subject shots: with two
-                    # subjects SDXL blends the reference into both (a crow-shaped pot).
+                    src = Path(ln["from_image"]) if ln.get("from_image") else None
+                    if src and src.exists():  # the user's own picture is the first frame
+                        img = Image.open(src).convert("RGB")
+                        ImageOps.fit(img, (vw, vh), Image.LANCZOS).save(job_dir / sc["keyframe"])
+                        if i == 0:
+                            img.save(job_dir / "thumb.jpg", quality=88)
+                        rep("keyframes", 0.1 + 0.8 * (k + 1) / len(items), f"{label} {k + 1}/{len(items)} (your image)")
+                        continue
+                    # Trained LoRAs (Library characters + house style) lock the look
+                    # exactly; otherwise a reference image, only for single-subject
+                    # shots: with two subjects SDXL blends it into both.
                     present = [n for n in ln.get("characters", []) if n in refs]
-                    ref = Image.open(refs[present[0]]).convert("RGB") if len(present) == 1 else None
+                    shot_loras = [char_loras[n] for n in ln.get("characters", []) if n in char_loras] + style_loras
+                    ref, ip_scale = None, None
+                    if len(present) == 1 and present[0] not in char_loras:
+                        ref = Image.open(refs[present[0]]).convert("RGB")
+                    elif location_ref is not None and not [n for n in present if n not in char_loras]:
+                        # Free reference slot (no character, or only LoRA characters):
+                        # show the model the user's actual location.
+                        ref, ip_scale = location_ref, 0.35
                     seed = int(sc.get("kf_seed") or int(spec.get("seed", 42)) + sc["line"])
-                    img = engine.keyframe(keyframe_prompt(spec, ln), spec["aspect"], seed, ref)
+                    img = engine.keyframe(keyframe_prompt(spec, ln), spec["aspect"], seed, ref, loras=shot_loras, ip_scale=ip_scale)
                     ImageOps.fit(img, (vw, vh), Image.LANCZOS).save(job_dir / sc["keyframe"])
                     if i == 0:
                         img.convert("RGB").save(job_dir / "thumb.jpg", quality=88)
@@ -208,7 +243,7 @@ def default_edit(spec: dict, job_dir: Path) -> dict:
         if end_text:
             edit["texts"].append({"text": end_text, "start": max(total - 2.2, 0),
                                   "end": total + 1, "position": "center", "size": "xl", "style": "title"})
-    edit["subtitles_on"] = bool(spec.get("subtitles", True))
+    edit["subtitles_on"] = bool(spec.get("lyric_subtitles") if spec.get("song") else spec.get("subtitles", True))
     edit["audio"]["voice"] = spec.get("voice")
     edit["look"]["filter"] = cut.get("filter", "none")
     music = spec.get("music") or {}

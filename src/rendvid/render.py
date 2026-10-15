@@ -36,6 +36,17 @@ def full_prompt(spec: dict, scene: dict) -> str:
     return " ".join(parts)
 
 
+def engine_for(spec: dict, preset: dict) -> tuple[Callable, Callable]:
+    """(encode_prompts, engine factory) for the spec's video engine:
+    spec["engine"] > preset["engine"] > config.VIDEO_ENGINE."""
+    name = spec.get("engine") or preset.get("engine") or config.VIDEO_ENGINE
+    if name == "wan":
+        from . import wan
+
+        return wan.encode_prompts, wan.WanEngine
+    return encode_prompts, lambda: VideoEngine(multiscale=preset["multiscale"])
+
+
 def run_job(
     spec: dict, job_dir: Path, report: Report, should_cancel: Callable[[], bool], *, assemble: bool = True
 ) -> dict:
@@ -60,6 +71,7 @@ def run_job(
     clip = lambda i: job_dir / f"scene_{i + 1:02d}.mp4"  # noqa: E731
     tail_dir = lambda i: job_dir / f"tail_{i + 1:02d}"  # noqa: E731
     todo = [i for i in range(n) if not clip(i).exists()]
+    encode, make_engine = engine_for(spec, preset)
 
     # 1. Prompt embeddings (text encoder loaded alone, then freed).
     embeds = {}
@@ -67,7 +79,7 @@ def run_job(
         rep("encode", 0.1, "Loading text encoder… (first run downloads ~19 GB, this can take a while)")
         t = time.time()
         negative = spec.get("negative") or config.DEFAULT_NEGATIVE
-        enc = encode_prompts([full_prompt(spec, scenes[i]) for i in todo], negative)
+        enc = encode([full_prompt(spec, scenes[i]) for i in todo], negative)
         embeds = dict(zip(todo, enc))
         timings["encode"] = time.time() - t
     check()
@@ -79,7 +91,7 @@ def run_job(
     if todo:
         rep("scenes", 0, "Loading video model…")
         t = time.time()
-        engine = VideoEngine(multiscale=preset["multiscale"])
+        engine = make_engine()
         timings["load_video_model"] = time.time() - t
         scene_times = []
         try:

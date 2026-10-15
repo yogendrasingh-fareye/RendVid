@@ -24,7 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from .. import config, tts
+from .. import config, library, tts
 from ..studio import split_script
 from . import runner
 from .members import CREW
@@ -32,6 +32,7 @@ from .members import CREW
 PROD_DIR = runner.CREW_DIR / "productions"
 _locks: dict[str, threading.Lock] = {}
 _busy: set[str] = set()
+_stopping: set[str] = set()
 _jobs = None  # JobManager, injected by the server
 _submit: Callable[[dict], dict] | None = None
 
@@ -84,7 +85,8 @@ def list_all() -> list[dict]:
     for f in PROD_DIR.glob("*.json"):
         try:
             p = json.loads(f.read_text())
-            out.append({k: p.get(k) for k in ("id", "title", "stage", "updated", "created", "job_id", "busy", "activity")})
+            out.append({k: p.get(k) for k in ("id", "title", "stage", "updated", "created", "job_id", "busy", "activity", "active", "cost",
+                                              "member_stats")})
         except json.JSONDecodeError:
             pass
     return sorted(out, key=lambda p: p["updated"], reverse=True)
@@ -104,17 +106,58 @@ def _activity(pid: str, text: str) -> None:
 
 # --- entry points ----------------------------------------------------------------
 
-def create(text: str) -> dict:
+UPLOADS = runner.CREW_DIR / "uploads"
+AUDIO_EXT = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def save_attachment(name: str, data: bytes) -> dict:
+    """Store a file sent in chat; returns its public info."""
+    ext = Path(name).suffix.lower()
+    if ext not in AUDIO_EXT | IMAGE_EXT:
+        raise ValueError(f"Unsupported file type {ext or '(none)'}; send audio or images")
+    if len(data) > 60 * 1024 * 1024:
+        raise ValueError("File too large (max 60 MB)")
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    aid = uuid.uuid4().hex[:10]
+    path = UPLOADS / f"{aid}{ext}"
+    path.write_bytes(data)
+    info = {"id": aid, "name": Path(name).name[:80], "kind": "audio" if ext in AUDIO_EXT else "image",
+            "url": f"/outputs/.crew/uploads/{aid}{ext}", "size": len(data), "file": path.name}
+    if info["kind"] == "audio":
+        from .. import stitch
+
+        info["duration"] = round(stitch.probe_duration(path), 2)
+        if info["duration"] <= 0:
+            path.unlink(missing_ok=True)
+            raise ValueError("Could not read that audio file")
+    (UPLOADS / f"{aid}.json").write_text(json.dumps(info))
+    return info
+
+
+def attachment(aid: str) -> dict | None:
+    p = UPLOADS / f"{Path(aid).name}.json"
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+def attachment_path(aid: str) -> Path | None:
+    a = attachment(aid)
+    return UPLOADS / a["file"] if a else None
+
+
+def create(text: str, attachments: list[str] | None = None) -> dict:
     pid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
-    prod = {"id": pid, "title": text.strip().split("\n")[0][:60] or "New film", "created": time.time(),
+    title = text.strip().split("\n")[0][:60] or next((a["name"] for a in map(attachment, attachments or []) if a), "New film")
+    prod = {"id": pid, "title": title, "created": time.time(),
             "stage": "briefing", "busy": False, "activity": "", "messages": [], "cost": 0.0}
     _save(prod)
-    user_message(pid, text)
+    user_message(pid, text, attachments)
     return load(pid)
 
 
-def user_message(pid: str, text: str) -> None:
-    post(pid, "user", text)
+def user_message(pid: str, text: str, attachments: list[str] | None = None) -> None:
+    files = [a for a in map(attachment, attachments or []) if a]
+    post(pid, "user", text, data={"attachments": files} if files else None)
     _spawn(pid, _producer_turn, text)
 
 
@@ -130,6 +173,43 @@ def approve(pid: str, what: str) -> None:
         raise ValueError("Nothing to approve right now")
 
 
+def stop(pid: str) -> str:
+    """Interrupt whatever the crew is doing in this production."""
+    prod = load(pid)
+    stopped = []
+    if pid in _busy:
+        _stopping.add(pid)
+        runner.stop(pid)
+        stopped.append("the crew")
+        # A half-made storyboard can't be approved: go back to the approved brief.
+        if prod["stage"] == "planning":
+            _update(pid, stage="awaiting_brief" if prod.get("brief") else "briefing")
+    if prod.get("job_id"):
+        job = _jobs.load(prod["job_id"]) or {}
+        if job.get("status") in ("queued", "running"):
+            _jobs.cancel(prod["job_id"])
+            runner.stop(pid)  # a QA Critic check inside the render, if one is running
+            stopped.append("the render (finished shots are kept)")
+    if not stopped:
+        raise ValueError("Nothing is running")
+    post(pid, "system", f"Stopped {' and '.join(stopped)}. Reply with what to change, or resume.", "stopped",
+         {"render": len(stopped) > 1 or stopped[0].startswith("the render")})
+    return ", ".join(stopped)
+
+
+def resume(pid: str) -> None:
+    """Continue a stopped/failed render from the last finished shot."""
+    prod = load(pid)
+    job = _jobs.load(prod["job_id"]) if prod.get("job_id") else None
+    if not job or job["status"] in ("queued", "running"):
+        raise ValueError("No stopped render to resume")
+    _jobs.enqueue(prod["job_id"])
+    _update(pid, stage="rendering")
+    post(pid, "user", "▶ Resume the render")
+    post(pid, "producer", "Resuming from the last finished shot.", "progress", {"job_id": prod["job_id"]})
+    threading.Thread(target=_watch_render, args=(pid,), daemon=True).start()
+
+
 def _spawn(pid: str, fn, *args) -> None:
     if pid in _busy:
         raise ValueError("The crew is still working on the last step; wait a moment")
@@ -140,27 +220,78 @@ def _spawn(pid: str, fn, *args) -> None:
         try:
             fn(pid, *args)
         except Exception as e:
-            traceback.print_exc()
-            post(pid, "system", f"Something went wrong: {e}", "error")
+            if pid in _stopping or isinstance(e, runner.Stopped):
+                pass  # stop() already told the user
+            else:
+                traceback.print_exc()
+                post(pid, "system", f"Something went wrong: {e}", "error")
         finally:
+            _stopping.discard(pid)
             _busy.discard(pid)
-            _update(pid, busy=False, activity="")
+            _active.pop(pid, None)
+            _update(pid, busy=False, activity="", active=[])
 
     threading.Thread(target=work, daemon=True).start()
 
 
 # --- member calls --------------------------------------------------------------------
 
+_active: dict[str, dict[str, str]] = {}  # pid -> {member key: activity text}
+
+
+def _set_active(pid: str) -> None:
+    act = _active.get(pid, {})
+    if len(act) == 1:
+        text = next(iter(act.values()))
+    elif act:
+        roles = [CREW[k]["role"] for k in act]
+        text = f"{', '.join(roles[:-1])} and {roles[-1]} are working…"
+    else:
+        text = ""
+    _update(pid, activity=text, active=list(act))
+
+
+def user_images(prod: dict) -> list[dict]:
+    """Images the user attached anywhere in this chat."""
+    return [a for m in prod["messages"] if m["from"] == "user"
+            for a in (m.get("data") or {}).get("attachments", []) if a.get("kind") == "image"]
+
+
 def _call(pid: str, key: str, prompt: str, activity: str, read_dir: Path | None = None) -> dict:
     m = CREW[key]
-    _activity(pid, f"{m['role']} {activity}")
-    out = runner.run(key, m, prompt, m["schema"], read_dir=read_dir)
+    if read_dir is None and (imgs := user_images(load(pid))):
+        # Let the member actually look at the user's pictures (read-only Read tool).
+        read_dir = UPLOADS
+        prompt = ("THE USER ATTACHED THESE IMAGES. Open every one with the Read tool and look at it before you answer; "
+                  "describe and use what you actually see:\n"
+                  + "\n".join(f"- id {a['id']} ({a['name']}): {UPLOADS / a['file']}" for a in imgs) + "\n\n" + prompt)
+    _active.setdefault(pid, {})[key] = f"{m['role']} {activity}"
+    _set_active(pid)
+    try:
+        if pid in _stopping:
+            raise runner.Stopped("stopped")
+        out = runner.run(key, m, prompt, m["schema"], read_dir=read_dir, owner=pid)
+    finally:
+        _active.get(pid, {}).pop(key, None)
+        _set_active(pid)
     runner.save_memories(key, m["role"], pid, out.pop("memories", None))
     with _lock(pid):
         prod = load(pid)
         prod["cost"] = round(prod.get("cost", 0) + (out.get("_cost") or 0), 4)
+        stats = prod.setdefault("member_stats", {}).setdefault(key, {"cost": 0.0, "runs": 0})
+        stats["cost"] = round(stats["cost"] + (out.get("_cost") or 0), 4)
+        stats["runs"] += 1
         _save(prod)
     return out
+
+
+def _parallel(*calls):
+    """Run independent member calls at the same time; results in order."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=len(calls)) as ex:
+        futures = [ex.submit(fn, *args) for fn, *args in calls]
+        return [f.result() for f in futures]
 
 
 def _j(x) -> str:
@@ -192,6 +323,12 @@ def _producer_turn(pid: str, text: str) -> None:
         job = _jobs.load(prod["job_id"]) or {}
         state.append(f"Render job: {job.get('status')} ({round(100 * job.get('progress', 0))}%) {job.get('message', '')}")
     history = "\n".join(f"{m['from']}: {m['text'][:600]}" for m in prod["messages"][-14:])
+    files = [a for m in prod["messages"] if m["from"] == "user" for a in (m.get("data") or {}).get("attachments", [])]
+    if files:
+        state.append("FILES THE USER ATTACHED IN THIS CHAT:\n" + "\n".join(
+            f"- id {a['id']}: {a['name']} ({a['kind']}" + (f", {int(a['duration'] // 60)}:{int(a['duration'] % 60):02d}" if a.get("duration") else "")
+            + ")" for a in files))
+    state.append(f"USER'S LIBRARY (characters & resources they built; '@Name' in a message refers to these):\n{library.catalog()}")
     prompt = (
         "PRODUCTION STATE\n" + "\n\n".join(state) +
         f"\n\nRECENT CHAT\n{history}\n\nNEW MESSAGE FROM THE USER\n{text}\n\n"
@@ -214,14 +351,59 @@ def _producer_turn(pid: str, text: str) -> None:
 
 # --- planning -------------------------------------------------------------------------------
 
+def song_beats(duration: float, segments: list, target: float = 4.6, lo: float = 2.6, hi: float = 6.5) -> list[dict]:
+    """Cut a song into shot-sized beats that start where lyric lines start."""
+    from ..lyrics import in_window
+
+    marks = sorted({round(t, 2) for s, e, _ in segments for t in (s, e) if 0.5 < t < duration - 0.5})
+    beats, t, chapter, last_lyric = [], 0.0, 0, 0.0
+    while duration - t > 0.3:
+        options = [m for m in marks if lo <= m - t <= hi]
+        end = min(options, key=lambda m: abs(m - t - target)) if options else min(t + target, duration)
+        if duration - end < lo:  # don't leave a sliver at the end
+            end = duration
+        words = in_window(segments, t, end).strip()
+        if words:
+            if t - last_lyric > 4 and beats:  # a pause in the singing starts a new section
+                chapter += 1
+            last_lyric = end
+        elif beats and beats[-1]["beat"] != "(instrumental)" and t - last_lyric > 3:
+            chapter += 1
+        beats.append({"narration": "", "beat": words or "(instrumental)", "seconds": round(end - t, 3),
+                      "start": round(t, 2), "chapter": chapter})
+        t = end
+    return beats
+
+
 def _plan(pid: str, notes: str = "") -> None:
     _update(pid, stage="planning")
     prod = load(pid)
     brief = prod["brief"]
     narrated = brief.get("format") == "narrated"
+    music_video = brief.get("format") == "music_video"
 
     # 1. Script
-    if narrated and brief.get("source") == "script" and brief.get("script", "").strip():
+    if music_video:
+        song = attachment_path(brief.get("song", ""))
+        if not song:
+            raise ValueError("Attach the song (MP3) in the chat first")
+        from .. import lyrics, stitch
+
+        _active.setdefault(pid, {})["writer"] = "Writer is listening to the song and transcribing the lyrics…"
+        _set_active(pid)
+        try:
+            duration = stitch.probe_duration(song)
+            words = lyrics.transcribe(song) if brief.get("use_lyrics", True) else {"language": None, "segments": []}
+        finally:
+            _active.get(pid, {}).pop("writer", None)
+            _set_active(pid)
+        lines = song_beats(duration, words["segments"])
+        script = {"title": brief.get("title", ""), "chapters": [], "lines": lines,
+                  "song": {"path": str(song), "duration": duration, "lyrics": words["segments"], "language": words["language"]}}
+        post(pid, "writer", f"Song is {int(duration // 60)}:{int(duration % 60):02d}. I found {len(words['segments'])} lyric lines "
+                            f"({words['language'] or 'instrumental'}) and cut it into {len(lines)} beats that follow the singing.",
+             "lyrics", {"lines": words["segments"], "language": words["language"], "duration": duration})
+    elif narrated and brief.get("source") == "script" and brief.get("script", "").strip():
         lines = split_script(brief["script"])
         script = {"title": brief.get("title", ""), "chapters": [], "lines": lines}
         post(pid, "writer", f"Your script is narrated word for word: {len(lines)} lines in "
@@ -240,9 +422,16 @@ def _plan(pid: str, notes: str = "") -> None:
         post(pid, "writer", f"Script ready: “{script['title']}”, {len(script['lines'])} lines"
                             + (f", {words} words" if narrated else "") + ".",
              "script", {"lines": script["lines"][:200]})
+    if not script["lines"]:
+        raise ValueError("The Writer returned an empty script, so there is nothing to shoot. "
+                         "Reply with what should happen in the film and I'll try again.")
     _update(pid, script=script)
-    script_text = "\n".join(f"{i}. [ch {ln.get('chapter', 0)}] {ln.get('narration') or ln.get('beat', '')}"
-                            for i, ln in enumerate(script["lines"], 1))
+    script_text = "\n".join(
+        f"{i}. [ch {ln.get('chapter', 0)}]" + (f" [{_mmss(ln['start'])}–{_mmss(ln['start'] + ln['seconds'])}] lyric: " if "start" in ln else " ")
+        + (ln.get("narration") or ln.get("beat", "")) for i, ln in enumerate(script["lines"], 1))
+    if music_video:
+        script_text = ("MUSIC VIDEO. The song plays over the whole film; each numbered beat is one shot timed to the "
+                       "lyric sung during it. No narration.\n" + script_text)
 
     # 2. Director
     director = _call(pid, "director", f"BRIEF\n{_j(brief)}\n\nSCRIPT\n{script_text}", "is shaping the vision…")
@@ -250,35 +439,70 @@ def _plan(pid: str, notes: str = "") -> None:
     post(pid, "director", f"{director.get('vision', '')}\nTone: {director.get('tone', '')}")
     _update(pid, director=director)
 
-    # 3. Production design
-    design = _call(pid, "designer", f"BRIEF\n{_j(brief)}\n\nDIRECTOR\n{_j(director)}\n\nSCRIPT\n{script_text}",
-                   "is designing the look…")
+    # 3. Production design, sound and the cut are independent of each other:
+    #    run them at the same time.
+    voices = tts.all_voices()
+    design, sound, editor = _parallel(
+        (_call, pid, "designer", f"BRIEF\n{_j(brief)}\n\nDIRECTOR\n{_j(director)}\n\nSCRIPT\n{script_text}\n\n"
+         f"USER'S LIBRARY (reuse entries the user @mentions or that clearly fit; copy their description verbatim and set library_id)\n"
+         f"{library.catalog()}", "is designing the look…"),
+        (_call, pid, "sound", f"BRIEF\n{_j(brief)}\n\nDIRECTOR\n{_j(director)}\n\nAVAILABLE VOICES\n{_j(voices)}\n\n"
+         f"MUSIC IN THE USER'S LIBRARY\n{library.catalog()}", "is choosing voice and music…"),
+        (_call, pid, "editor", f"BRIEF\n{_j(brief)}\n\nDIRECTOR\n{_j(director)}", "is planning the cut…"),
+    )
+    known = {a["id"]: a for a in library.list_assets()}
+    for c in design.get("characters", []):
+        lib = known.get(c.get("library_id") or "")
+        if lib:
+            c["look"] = lib["description"] or c.get("look", "")
+            library.mark_used(lib["id"], pid)
+        else:
+            c["library_id"] = ""
     design["characters"] = [c for c in design.get("characters", []) if c.get("name") and c.get("look")][:5]
-    post(pid, "designer", "Design bible:\n" + "\n".join(f"• {c['name']}: {c['look']}" for c in design["characters"])
+    post(pid, "designer", "Design bible:\n" + "\n".join(
+        f"• {c['name']}{' 📚 from your library' if c.get('library_id') else ''}: {c['look']}" for c in design["characters"])
          + f"\n• Setting: {design.get('setting', '')}\n• Art direction: {design.get('look', '')}")
     _update(pid, design=design)
 
     # 4. Cinematographer, in batches so long films stay sharp
     bible = _j({k: design.get(k) for k in ("characters", "setting", "look")})
-    shots: list[dict] = []
     lines = script["lines"]
-    for b0 in range(0, len(lines), 14):
-        part = lines[b0:b0 + 14]
-        listing = "\n".join(f"{b0 + k + 1}. {ln.get('narration') or '(silent) ' + ln.get('beat', '')}" for k, ln in enumerate(part))
-        prev = f"\nPREVIOUS SHOT\n{shots[-1]['visual']}\n" if shots else ""
+
+    def dop_batch(b0: int) -> list[dict]:
+        part = lines[b0:b0 + 12]
+        listing = "\n".join(
+            f"{b0 + k + 1}. " + (f"[{_mmss(ln['start'])}, {ln['seconds']:.1f}s] lyric: {ln.get('beat')}" if "start" in ln
+                                 else ln.get("narration") or "(silent) " + ln.get("beat", ""))
+            for k, ln in enumerate(part))
+        if music_video:
+            listing = ("MUSIC VIDEO: the song plays throughout; the performer may be shown singing, but there is NO "
+                       "lip-sync, so frame singing as side or three-quarter angles, medium or wide shots, eyes closed "
+                       "in emotion, or singing away from camera, never a frontal mouth close-up.\n" + listing)
+        prev = (f"\nTHE LINE BEFORE THIS BATCH (already shot by a colleague): "
+                f"{lines[b0 - 1].get('narration') or lines[b0 - 1].get('beat', '')}\n") if b0 else ""
         out = _call(pid, "dop", f"BRIEF\n{_j(brief)}\n\nDIRECTOR\n{_j(director)}\n\nDESIGN BIBLE\n{bible}\n{prev}\n"
                     f"LINES (write exactly one shot per line, keep the line numbers)\n{listing}",
                     f"is designing shots {b0 + 1}–{b0 + len(part)}…")
         got = {s["line"]: s for s in out.get("shots", []) if isinstance(s.get("line"), int)}
+        res = []
         for k, ln in enumerate(part):
             n = b0 + k + 1
             s = got.get(n) or {"line": n, "visual": ln.get("beat") or ln.get("narration", ""), "characters": [], "new_shot": True}
             s["line"] = n
-            shots.append(s)
+            res.append(s)
+        return res
+
+    # Batches go out together (max 4 at once) so a long film is storyboarded in one pass.
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        shots = [s for batch in ex.map(dop_batch, range(0, len(lines), 12)) for s in batch]
     shots[0]["new_shot"] = True
     names = {c["name"] for c in design["characters"]}
+    image_ids = {a["id"] for a in user_images(load(pid))}
     for s in shots:
         s["characters"] = [c for c in s.get("characters", []) if c in names]
+        s["from_image"] = s.get("from_image") if s.get("from_image") in image_ids else ""
     post(pid, "dop", f"Shot list ready: {len(shots)} shots.")
     _update(pid, shots=shots)
 
@@ -296,16 +520,22 @@ def _plan(pid: str, notes: str = "") -> None:
          if fixes else f"Storyboard checks out. {review.get('note', '')}")
     _update(pid, shots=shots)
 
-    # 6. Sound + 7. Editor
-    voices = tts.all_voices()
-    sound = _call(pid, "sound", f"BRIEF\n{_j(brief)}\n\nDIRECTOR\n{_j(director)}\n\nAVAILABLE VOICES\n{_j(voices)}",
-                  "is choosing voice and music…")
-    if sound.get("voice") not in voices or not narrated:
+    # Sound + cut were decided alongside the design; report them now.
+    if music_video:  # the user's song is the soundtrack; beat cuts keep sync
+        sound = {"voice": "", "music": "song", "music_prompt": "", "music_volume": 1.0,
+                 "note": "Your song is the soundtrack, at full volume."}
+        editor["shot_transition"] = "cut"
+        if editor.get("chapter_transition") not in ("cut", "dissolve", "fade"):
+            editor["chapter_transition"] = "dissolve"
+        editor["end_text"] = ""
+    if music_video:
+        post(pid, "sound", "Soundtrack: your song at full volume, with every shot cut on the beat of the lyrics.")
+    elif sound.get("voice") not in voices or not narrated:
         sound["voice"] = _default_voice(brief) if narrated else ""
-    post(pid, "sound", f"Narrator: {voices.get(sound['voice'], 'none')}. Music: "
-                       + (f"{sound.get('music_prompt')} (vol {sound.get('music_volume')})" if sound.get("music") == "generate" else "none")
-                       + (f"\n{sound['note']}" if sound.get("note") else ""))
-    editor = _call(pid, "editor", f"BRIEF\n{_j(brief)}\n\nDIRECTOR\n{_j(director)}", "is planning the cut…")
+    if not music_video:
+        post(pid, "sound", f"Narrator: {voices.get(sound['voice'], 'none')}. Music: "
+                           + (f"{sound.get('music_prompt')} (vol {sound.get('music_volume')})" if sound.get("music") == "generate" else "none")
+                           + (f"\n{sound['note']}" if sound.get("note") else ""))
     post(pid, "editor", f"Cut: {editor.get('chapter_transition')} between chapters, {editor.get('shot_transition')} between shots, "
                         f"filter {editor.get('filter')}, subtitles {'on' if editor.get('subtitles') else 'off'}"
                         + (f", title “{editor.get('title_text')}”" if editor.get("title_card") else "") + ".")
@@ -317,6 +547,10 @@ def _plan(pid: str, notes: str = "") -> None:
                           f"≈ {math.ceil((n_shots * shot_secs + 300) / 60)} min on {brief.get('quality')}. "
                           "Approve to start, or tell me what to change.",
          "storyboard", {"rows": _rows(prod)})
+
+
+def _mmss(t: float) -> str:
+    return f"{int(t // 60)}:{int(t % 60):02d}"
 
 
 def _default_voice(brief: dict) -> str:
@@ -331,7 +565,7 @@ def _estimate_shots(prod: dict) -> int:
     n = 0
     for ln in prod["script"]["lines"]:
         secs = len(ln.get("narration", "").split()) / 2.1 + 0.5 if ln.get("narration") else ln.get("seconds", 5)
-        n += max(1, math.ceil(secs / 4.8))
+        n += max(1, math.ceil((secs - 0.05) / 5.04))
     return n
 
 
@@ -339,7 +573,8 @@ def _rows(prod: dict) -> list[dict]:
     lines = prod["script"]["lines"]
     return [{"line": i + 1, "chapter": ln.get("chapter", 0), "narration": ln.get("narration") or "",
              "beat": ln.get("beat", ""), "visual": s["visual"], "characters": s.get("characters", []),
-             "new_shot": s.get("new_shot", True)} for i, (ln, s) in enumerate(zip(lines, prod["shots"]))]
+             "new_shot": s.get("new_shot", True) or bool(s.get("from_image")), "from_image": s.get("from_image", "")}
+            for i, (ln, s) in enumerate(zip(lines, prod["shots"]))]
 
 
 # --- render ---------------------------------------------------------------------------------
@@ -355,15 +590,28 @@ def _spec(prod: dict) -> dict:
         "style": design.get("style") or brief.get("style") or "none",
         "seed": random.randint(1, 99999),
         "characters": design.get("characters", []), "setting": design.get("setting", ""), "look": design.get("look", ""),
+        "style_asset": design.get("style_library_id") or "",
+        "location_asset": design.get("location_library_id") or "",
         "lines": [{"narration": r["narration"], "visual": r["visual"], "characters": r["characters"],
                    "new_shot": r["new_shot"], "chapter": r["chapter"],
+                   "from_image": str(attachment_path(r["from_image"]) or "") if r.get("from_image") else "",
                    "seconds": next((ln.get("seconds") for ln in [prod["script"]["lines"][r["line"] - 1]]), None) or 5}
                   for r in _rows(prod)],
         "subtitles": bool(editor.get("subtitles", True)), "title_card": bool(editor.get("title_card", True)),
         "music": {"mode": sound.get("music", "none"), "prompt": sound.get("music_prompt", ""),
                   "volume": float(sound.get("music_volume") or 0.18)},
         "editor": editor,
+        **_song_spec(prod),
     }
+
+
+def _song_spec(prod: dict) -> dict:
+    song = (prod.get("script") or {}).get("song")
+    if not song:
+        return {}
+    return {"song": True, "song_path": song["path"], "lyrics": song["lyrics"],
+            "lyric_subtitles": bool(prod["editor"].get("subtitles", False)),
+            "music": {"mode": "upload", "volume": 1.0}}
 
 
 def _render(pid: str) -> None:
@@ -385,7 +633,8 @@ def _watch_render(pid: str) -> None:
             break
         if job["status"] in ("failed", "cancelled", "interrupted"):
             _update(pid, stage="done")
-            post(pid, "system", f"Render {job['status']}: {job.get('message', '')}. Say “resume” to continue.", "error")
+            if job["status"] != "cancelled":  # a user Stop already posted its own message
+                post(pid, "system", f"Render {job['status']}: {job.get('message', '')}", "stopped", {"render": True})
             return
         time.sleep(5)
     if prod.get("stage") == "rendering" and prod.get("review_after", True):
@@ -441,18 +690,24 @@ def _line_of(name: str) -> int:
 def critic_review(pid: str, spec: dict, images: list[Path], activity: str) -> list[dict]:
     """Ask the QA Critic to look at images named line_NNN.*; returns pass/redo per image."""
     looks = _j({"characters": spec.get("characters"), "setting": spec.get("setting"), "look": spec.get("look")})
-    results = []
-    for b0 in range(0, len(images), 10):
-        batch = images[b0:b0 + 10]
+
+    def batch_review(b0: int) -> list[dict]:
+        batch = images[b0:b0 + 8]
         listing = "\n".join(f"- {p.name}: line {_line_of(p.name)}: “{spec['lines'][_line_of(p.name) - 1].get('narration') or ''}”\n"
                             f"  intended shot: {spec['lines'][_line_of(p.name) - 1]['visual']}" for p in batch)
         out = _call(pid, "critic", f"DESIGN BIBLE\n{looks}\n\nOpen each image file below (in {batch[0].parent}) "
                     f"with the Read tool and judge it.\n{listing}", activity, read_dir=batch[0].parent)
         by_name = {r.get("shot"): r for r in out.get("results", [])}
+        res = []
         for p in batch:
             r = by_name.get(p.name) or {"verdict": "pass", "problem": "", "fix": ""}
-            results.append({"shot": p.name, "verdict": r.get("verdict", "pass"), "problem": r.get("problem", ""), "fix": r.get("fix", "")})
-    return results
+            res.append({"shot": p.name, "verdict": r.get("verdict", "pass"), "problem": r.get("problem", ""), "fix": r.get("fix", "")})
+        return res
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        return [r for batch in ex.map(batch_review, range(0, len(images), 8)) for r in batch]
 
 
 # --- keyframe QA (called from inside the render) ----------------------------------------
@@ -461,10 +716,16 @@ def review_keyframes(pid: str, spec: dict, job_dir: Path, regenerate: Callable[[
     """Critic checks new keyframes; failing ones get the critic's fix and are redrawn."""
     checked: set[str] = set()
     for rnd in range(rounds):
-        kfs = [p for p in sorted((job_dir / "keyframes").glob("line_*.png")) if p.name not in checked]
+        kfs = [p for p in sorted((job_dir / "keyframes").glob("line_*.png"))
+               if p.name not in checked and not spec["lines"][_line_of(p.name) - 1].get("from_image")]
         if not kfs:
             return
-        results = critic_review(pid, spec, kfs, f"is checking {len(kfs)} keyframes…")
+        try:
+            results = critic_review(pid, spec, kfs, f"is checking {len(kfs)} keyframes…")
+        except runner.Stopped:
+            from ..model import Cancelled
+
+            raise Cancelled()
         bad = [r for r in results if r["verdict"] == "redo"]
         checked |= {r["shot"] for r in results if r["verdict"] == "pass"}
         if not bad:

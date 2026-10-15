@@ -29,8 +29,10 @@ def obj(props: dict, required: list[str] | None = None) -> dict:
 
 BRIEF = obj({
     "title": STR,
-    "format": {"type": "string", "enum": ["narrated", "visual"],
-               "description": "narrated: a voice tells the story. visual: no voice, pure images and music"},
+    "format": {"type": "string", "enum": ["narrated", "visual", "music_video"],
+               "description": "narrated: a voice tells the story. visual: no voice, pure images and music. "
+                              "music_video: the user's attached song is the soundtrack and sets the length"},
+    "song": {"type": "string", "description": "For music_video: the id of the attached audio file; else empty"},
     "language": {"type": "string", "enum": ["Hindi", "English"]},
     "source": {"type": "string", "enum": ["script", "idea"],
                "description": "script: the user gave the exact words to narrate (or exact shots). idea: the Writer writes it"},
@@ -42,20 +44,27 @@ BRIEF = obj({
     "style": {"type": "string", "enum": list(config.STYLES)},
     "audience": STR,
     "notes": {"type": "string", "description": "Anything the crew must respect: tone, must-haves, things to avoid"},
+    "images": {"type": "array", "items": {"type": "string"},
+               "description": "ids of user-attached images this film uses (as first frames to animate, or as visual reference)"},
+    "image_use": {"type": "string", "enum": ["none", "animate", "reference"],
+                  "description": "animate: shots start from the user's image(s) exactly; reference: match their look but draw new frames"},
 })
 
 LINE = obj({
     "narration": {"type": "string", "description": "Spoken words (empty for a silent visual beat)"},
+    "beat": {"type": "string", "description": "For a silent beat: what happens on screen (English); empty when narrated"},
     "chapter": INT,
     "seconds": {"type": "number", "description": "Only for silent beats: how long to hold, 3-10"},
-}, ["narration", "chapter"])
+}, ["narration", "beat", "chapter"])
 
 SHOT = obj({
     "line": {"type": "integer", "description": "1-based line number"},
     "visual": STR,
     "characters": arr(STR),
     "new_shot": BOOL,
-})
+    "from_image": {"type": "string", "description": "id of a user-attached image to use as this shot's exact first frame "
+                                                    "(it gets animated as-is), or empty to have the shot drawn"},
+}, ["line", "visual", "characters", "new_shot", "from_image"])
 
 CREW = {
     "producer": {
@@ -107,9 +116,12 @@ CREW = {
         "so every shot looks like the same world: the exact look of every recurring character and key "
         "prop (only those the script actually contains), the setting and the art direction.",
         "schema": obj({
-            "characters": arr(obj({"name": STR, "look": STR})),
+            "characters": arr(obj({"name": STR, "look": STR,
+                                   "library_id": {"type": "string", "description": "id of the user's library asset this is, or empty for a new design"}})),
             "setting": STR, "look": STR,
             "style": {"type": "string", "enum": list(config.STYLES)},
+            "style_library_id": {"type": "string", "description": "id of a [style] asset from the user's library to apply as the house style, or empty"},
+            "location_library_id": {"type": "string", "description": "id of a [location] asset from the user's library where the film is set, or empty"},
         }),
     },
     "dop": {

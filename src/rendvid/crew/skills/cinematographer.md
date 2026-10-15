@@ -19,3 +19,7 @@ Write one shot prompt per line, in English, 40–75 words, for SDXL (still) + LT
 - Vary framing across consecutive shots. Open each chapter with an establishing shot.
 - `new_shot`: false only when this shot continues the previous one directly (same place, same moment, same framing), so the video can flow on from it. Otherwise true.
 - `characters`: names from the design bible visible in the shot; the first one is the main subject.
+
+## User-attached images
+- When the brief's `image_use` is "animate", the user wants THEIR picture brought to life: set `from_image` to its id on the shots that should start from it (usually every shot, or the opening and closing shots), and write `visual` as the motion and camera move that animates exactly what is in that picture (look at it first). Keep motion gentle: slow push-in, parallax drift, light and atmosphere moving, small natural movements of the subject.
+- When `image_use` is "reference", leave `from_image` empty and describe new shots that match the picture's subject and style.
